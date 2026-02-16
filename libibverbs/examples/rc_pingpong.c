@@ -62,12 +62,13 @@ static int prefetch_mr;
 static int use_ts;
 static int validate_buf;
 static int use_dm;
+static int allow_cc_decrypted;
 static int use_new_send;
 
 struct pingpong_context {
 	struct ibv_context	*context;
 	struct ibv_comp_channel *channel;
-	struct ibv_pd		*pd;
+	struct ibv_pd		*pd; /* PD or parent domain (if using CC decrypted alloc) */
 	struct ibv_mr		*mr;
 	struct ibv_dm		*dm;
 	union {
@@ -83,11 +84,12 @@ struct pingpong_context {
 	int			 pending;
 	struct ibv_port_attr     portinfo;
 	uint64_t		 completion_timestamp_mask;
+	struct ibv_buf		*ibv_buf;
 };
 
 static struct ibv_cq *pp_cq(struct pingpong_context *ctx)
 {
-	return use_ts ? ibv_cq_ex_to_cq(ctx->cq_s.cq_ex) :
+	return (use_ts || allow_cc_decrypted) ? ibv_cq_ex_to_cq(ctx->cq_s.cq_ex) :
 		ctx->cq_s.cq;
 }
 
@@ -360,10 +362,30 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 	} else
 		ctx->channel = NULL;
 
-	ctx->pd = ibv_alloc_pd(ctx->context);
-	if (!ctx->pd) {
-		fprintf(stderr, "Couldn't allocate PD\n");
-		goto clean_comp_channel;
+	if (allow_cc_decrypted) {
+		struct ibv_pd *base_pd = ibv_alloc_pd(ctx->context);
+		if (!base_pd) {
+			fprintf(stderr, "Couldn't allocate base PD\n");
+			goto clean_comp_channel;
+		}
+
+		struct ibv_parent_domain_init_attr parent_attr = {
+			.pd = base_pd,
+			.comp_mask = IBV_PARENT_DOMAIN_INIT_ATTR_ALLOW_CC_DECRYPTED_ALLOC,
+		};
+
+		ctx->pd = ibv_alloc_parent_domain(ctx->context, &parent_attr);
+		if (!ctx->pd) {
+			fprintf(stderr, "Couldn't allocate parent domain\n");
+			ibv_dealloc_pd(base_pd);
+			goto clean_comp_channel;
+		}
+	} else {
+		ctx->pd = ibv_alloc_pd(ctx->context);
+		if (!ctx->pd) {
+			fprintf(stderr, "Couldn't allocate PD\n");
+			goto clean_comp_channel;
+		}
 	}
 
 	if (use_odp || use_ts || use_dm) {
@@ -422,7 +444,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 		}
 	}
 
-	ctx->buf = memalign(page_size, size);
+	ctx->buf = ibv_alloc_buf(ctx->pd, size, &ctx->ibv_buf);
 	if (!ctx->buf) {
 		fprintf(stderr, "Couldn't allocate work buf.\n");
 		goto clean_dm;
@@ -460,14 +482,21 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 			fprintf(stderr, "Couldn't prefetch MR(%d). Continue anyway\n", ret);
 	}
 
-	if (use_ts) {
+	if (use_ts || allow_cc_decrypted) {
 		struct ibv_cq_init_attr_ex attr_ex = {
 			.cqe = rx_depth + 1,
 			.cq_context = NULL,
 			.channel = ctx->channel,
 			.comp_vector = 0,
-			.wc_flags = IBV_WC_EX_WITH_COMPLETION_TIMESTAMP
 		};
+
+		if (use_ts)
+			attr_ex.wc_flags = IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
+
+		if (allow_cc_decrypted) {
+			attr_ex.comp_mask |= IBV_CQ_INIT_ATTR_MASK_PD;
+			attr_ex.parent_domain = ctx->pd;
+		}
 
 		ctx->cq_s.cq_ex = ibv_create_cq_ex(ctx->context, &attr_ex);
 	} else {
@@ -558,7 +587,7 @@ clean_mr:
 	ibv_dereg_mr(ctx->mr);
 
 clean_buffer:
-	free(ctx->buf);
+	ibv_free_buf(ctx->pd, ctx->ibv_buf);
 
 clean_dm:
 	if (ctx->dm)
@@ -597,7 +626,7 @@ static int pp_close_ctx(struct pingpong_context *ctx)
 		return 1;
 	}
 
-	free(ctx->buf);
+	ibv_free_buf(ctx->pd, ctx->ibv_buf);
 
 	if (ctx->dm) {
 		if (ibv_free_dm(ctx->dm)) {
@@ -788,6 +817,8 @@ static void usage(const char *argv0)
 	printf("  -c, --chk	            validate received buffer\n");
 	printf("  -j, --dm	            use device memory\n");
 	printf("  -N, --new_send            use new post send WR API\n");
+	printf("  -D, --allow-cc-decrypted  allow allocation of decrypted/shared\n"
+	       "                            memory on CoCo guests\n");
 }
 
 int main(int argc, char *argv[])
@@ -838,10 +869,11 @@ int main(int argc, char *argv[])
 			{ .name = "chk",      .has_arg = 0, .val = 'c' },
 			{ .name = "dm",       .has_arg = 0, .val = 'j' },
 			{ .name = "new_send", .has_arg = 0, .val = 'N' },
+			{ .name = "allow-cc-decrypted", .has_arg = 0, .val = 'D' },
 			{}
 		};
 
-		c = getopt_long(argc, argv, "p:d:i:s:m:r:n:l:eg:oOPtcjN",
+		c = getopt_long(argc, argv, "p:d:i:s:m:r:n:l:eg:oOPtcjND",
 				long_options, NULL);
 
 		if (c == -1)
@@ -925,6 +957,10 @@ int main(int argc, char *argv[])
 			use_new_send = 1;
 			break;
 
+		case 'D':
+			allow_cc_decrypted = 1;
+			break;
+
 		default:
 			usage(argv[0]);
 			return 1;
@@ -940,6 +976,11 @@ int main(int argc, char *argv[])
 
 	if (use_odp && use_dm) {
 		fprintf(stderr, "DM memory region can't be on demand\n");
+		return 1;
+	}
+
+	if (allow_cc_decrypted && use_odp) {
+		fprintf(stderr, "CC decrypted memory cannot be used with ODP\n");
 		return 1;
 	}
 
