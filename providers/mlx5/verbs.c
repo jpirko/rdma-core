@@ -615,6 +615,45 @@ static int mlx5_dealloc_parent_domain(struct mlx5_parent_domain *mparent_domain)
 	return 0;
 }
 
+void *mlx5_alloc_buf_op(struct ibv_pd *pd, size_t size, struct ibv_buf **ibv_buf)
+{
+	struct mlx5_context *mctx = to_mctx(pd->context);
+	enum mlx5_alloc_type alloc_type;
+	struct mlx5_buf *buf;
+
+	buf = calloc(1, sizeof(*buf));
+	if (!buf) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	mlx5_get_alloc_type(mctx, pd, MLX5_MR_PREFIX, &alloc_type,
+			    MLX5_ALLOC_TYPE_ANON);
+
+	buf->mparent_domain = to_mparent_domain(pd);
+
+	if (mlx5_alloc_prefered_buf(mctx, buf, size,
+				    to_mdev(pd->context->device)->page_size,
+				    alloc_type, MLX5_QP_PREFIX)) {
+		free(buf);
+		return NULL;
+	}
+
+	*ibv_buf = (struct ibv_buf *)buf;
+	return buf->buf;
+}
+
+void mlx5_free_buf_op(struct ibv_pd *pd, struct ibv_buf *ibv_buf)
+{
+	struct mlx5_buf *buf = (struct mlx5_buf *)ibv_buf;
+
+	if (!buf)
+		return;
+
+	mlx5_free_actual_buf(to_mctx(pd->context), buf);
+	free(buf);
+}
+
 static int _mlx5_free_pd(struct ibv_pd *pd, bool unimport)
 {
 	int ret;
