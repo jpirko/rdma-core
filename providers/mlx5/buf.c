@@ -275,6 +275,30 @@ static int mlx5_alloc_buf_custom(struct mlx5_context *ctx,
 	return -1;
 }
 
+void mlx5_free_buf_dmabuf(struct mlx5_context *ctx, struct mlx5_buf *buf)
+{
+	ibv_dmabuf_heap_free(buf->buf, buf->length, buf->dmabuf_fd);
+}
+
+int mlx5_alloc_buf_dmabuf(struct mlx5_context *ctx,
+			  struct mlx5_buf *buf, size_t size)
+{
+	struct mlx5_parent_domain *mparent_domain = buf->mparent_domain;
+	int dmabuf_fd;
+	void *addr;
+
+	addr = ibv_dmabuf_heap_alloc(mparent_domain->dmabuf_heap, size,
+				     &dmabuf_fd);
+	if (!addr)
+		return -1;
+
+	buf->buf = addr;
+	buf->length = size;
+	buf->type = MLX5_ALLOC_TYPE_DMABUF;
+	buf->dmabuf_fd = dmabuf_fd;
+	return 0;
+}
+
 int mlx5_alloc_prefered_buf(struct mlx5_context *mctx,
 			    struct mlx5_buf *buf,
 			    size_t size, int page_size,
@@ -282,6 +306,9 @@ int mlx5_alloc_prefered_buf(struct mlx5_context *mctx,
 			    const char *component)
 {
 	int ret;
+
+	if (type == MLX5_ALLOC_TYPE_DMABUF)
+		return mlx5_alloc_buf_dmabuf(mctx, buf, size);
 
 	if (type == MLX5_ALLOC_TYPE_CUSTOM) {
 		ret = mlx5_alloc_buf_custom(mctx, buf, size);
@@ -357,6 +384,10 @@ int mlx5_free_actual_buf(struct mlx5_context *ctx, struct mlx5_buf *buf)
 		mlx5_free_buf_custom(ctx, buf);
 		break;
 
+	case MLX5_ALLOC_TYPE_DMABUF:
+		mlx5_free_buf_dmabuf(ctx, buf);
+		break;
+
 	default:
 		mlx5_err(ctx->dbg_fp, "Bad allocation type\n");
 	}
@@ -396,6 +427,13 @@ bool mlx5_is_custom_alloc(struct ibv_pd *pd)
 	return (mparent_domain && mparent_domain->alloc && mparent_domain->free);
 }
 
+bool mlx5_is_dmabuf_alloc(struct ibv_pd *pd)
+{
+	struct mlx5_parent_domain *mparent_domain = to_mparent_domain(pd);
+
+	return (mparent_domain && mparent_domain->dmabuf_heap);
+}
+
 bool mlx5_is_extern_alloc(struct mlx5_context *context)
 {
 	return context->extern_alloc.alloc && context->extern_alloc.free;
@@ -410,6 +448,11 @@ void mlx5_get_alloc_type(struct mlx5_context *context,
 {
 	char *env_value;
 	char name[128];
+
+	if (mlx5_is_dmabuf_alloc(pd)) {
+		*alloc_type = MLX5_ALLOC_TYPE_DMABUF;
+		return;
+	}
 
 	if (mlx5_is_custom_alloc(pd)) {
 		*alloc_type = MLX5_ALLOC_TYPE_CUSTOM;
