@@ -63,6 +63,16 @@ static struct ibv_mw *alloc_mw(struct ibv_pd *pd, enum ibv_mw_type type)
 	return NULL;
 }
 
+static void *alloc_buf(struct ibv_pd *pd, size_t size, struct ibv_buf **buf)
+{
+	errno = EOPNOTSUPP;
+	return NULL;
+}
+
+static void free_buf(struct ibv_pd *pd, struct ibv_buf *buf)
+{
+}
+
 static struct ibv_mr *alloc_null_mr(struct ibv_pd *pd)
 {
 	errno = EOPNOTSUPP;
@@ -535,6 +545,7 @@ static void unimport_pd(struct ibv_pd *pd)
  */
 const struct verbs_context_ops verbs_dummy_ops = {
 	advise_mr,
+	alloc_buf,
 	alloc_dm,
 	alloc_dmah,
 	alloc_mw,
@@ -576,6 +587,7 @@ const struct verbs_context_ops verbs_dummy_ops = {
 	destroy_wq,
 	detach_mcast,
 	dm_export_dmabuf_fd,
+	free_buf,
 	free_context,
 	free_dm,
 	get_srq_num,
@@ -665,6 +677,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 	} while (0)
 
 	SET_OP(vctx, advise_mr);
+	SET_OP(vctx, alloc_buf);
 	SET_OP(vctx, alloc_dm);
 	SET_OP(vctx, alloc_dmah);
 	SET_OP(ctx, alloc_mw);
@@ -706,6 +719,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 	SET_OP(vctx, destroy_wq);
 	SET_PRIV_OP(ctx, detach_mcast);
 	SET_OP(vctx, dm_export_dmabuf_fd);
+	SET_OP(vctx, free_buf);
 	SET_PRIV_OP_IC(ctx, free_context);
 	SET_OP(vctx, free_dm);
 	SET_OP(vctx, get_srq_num);
