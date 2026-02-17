@@ -47,7 +47,8 @@ struct mlx5_db_page {
 	unsigned long			free[0];
 };
 
-static struct mlx5_db_page *__add_page(struct mlx5_context *context)
+static struct mlx5_db_page *__add_page(struct mlx5_context *context,
+				       struct ibv_pd *pd)
 {
 	struct mlx5_db_page *page;
 	int ps = to_mdev(context->ibv_ctx.context.device)->page_size;
@@ -63,10 +64,14 @@ static struct mlx5_db_page *__add_page(struct mlx5_context *context)
 	if (!page)
 		return NULL;
 
-	if (mlx5_is_extern_alloc(context))
+	if (mlx5_is_dmabuf_alloc(pd)) {
+		page->buf.mparent_domain = to_mparent_domain(pd);
+		ret = mlx5_alloc_buf_dmabuf(context, &page->buf, ps);
+	} else if (mlx5_is_extern_alloc(context)) {
 		ret = mlx5_alloc_buf_extern(context, &page->buf, ps);
-	else
+	} else {
 		ret = mlx5_alloc_buf(&page->buf, ps, ps);
+	}
 	if (ret) {
 		free(page);
 		return NULL;
@@ -91,7 +96,7 @@ __be32 *mlx5_alloc_dbrec(struct mlx5_context *context, struct ibv_pd *pd,
 	__be32 *db = NULL;
 	int i, j;
 
-	if (mlx5_is_custom_alloc(pd)) {
+	if (!mlx5_is_dmabuf_alloc(pd) && mlx5_is_custom_alloc(pd)) {
 		struct mlx5_parent_domain *mparent_domain = to_mparent_domain(pd);
 
 		db = mparent_domain->alloc(&mparent_domain->mpd.ibv_pd,
@@ -111,12 +116,14 @@ __be32 *mlx5_alloc_dbrec(struct mlx5_context *context, struct ibv_pd *pd,
 default_alloc:
 	pthread_mutex_lock(&context->dbr_map_mutex);
 
-	page = list_top(&context->dbr_available_pages, struct mlx5_db_page,
-			available);
-	if (page)
-		goto found;
+	/* DMA-buf and non-DMA-buf pages must not be mixed. */
+	list_for_each(&context->dbr_available_pages, page, available) {
+		if (mlx5_is_dmabuf_alloc(pd) ==
+			(page->buf.type == MLX5_ALLOC_TYPE_DMABUF))
+			goto found;
+	}
 
-	page = __add_page(context);
+	page = __add_page(context, pd);
 	if (!page)
 		goto out;
 
@@ -152,8 +159,7 @@ void mlx5_free_db(struct mlx5_context *context, __be32 *db, struct ibv_pd *pd,
 
 		mparent_domain->free(&mparent_domain->mpd.ibv_pd,
 				     mparent_domain->pd_context,
-				     db,
-				     MLX5DV_RES_TYPE_DBR);
+				     db, MLX5DV_RES_TYPE_DBR);
 		return;
 	}
 
@@ -173,10 +179,7 @@ void mlx5_free_db(struct mlx5_context *context, __be32 *db, struct ibv_pd *pd,
 		cl_qmap_remove_item(&context->dbr_map, item);
 		list_del(&page->available);
 
-		if (page->buf.type == MLX5_ALLOC_TYPE_EXTERNAL)
-			mlx5_free_buf_extern(context, &page->buf);
-		else
-			mlx5_free_buf(&page->buf);
+		mlx5_free_actual_buf(context, &page->buf);
 
 		free(page);
 	}

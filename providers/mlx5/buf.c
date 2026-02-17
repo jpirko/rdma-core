@@ -275,6 +275,43 @@ static int mlx5_alloc_buf_custom(struct mlx5_context *ctx,
 	return -1;
 }
 
+void mlx5_free_buf_dmabuf(struct mlx5_context *ctx, struct mlx5_buf *buf)
+{
+	if (!buf->ibv_buf.addr)
+		return;
+	ibv_dofork_range(buf->ibv_buf.addr, buf->ibv_buf.size);
+	ibv_dmabuf_heap_free(buf->ibv_buf.addr, buf->ibv_buf.size,
+			     buf->ibv_buf.dmabuf.fd);
+}
+
+int mlx5_alloc_buf_dmabuf(struct mlx5_context *ctx,
+			  struct mlx5_buf *buf, size_t size)
+{
+	struct mlx5_parent_domain *mparent_domain = buf->mparent_domain;
+	int dmabuf_fd;
+	void *addr;
+
+	if (!size)
+		return 0;
+
+	addr = ibv_dmabuf_heap_alloc(mparent_domain->dmabuf_heap, size,
+				     &dmabuf_fd);
+	if (!addr)
+		return -1;
+
+	if (ibv_dontfork_range(addr, size)) {
+		ibv_dmabuf_heap_free(addr, size, dmabuf_fd);
+		return -1;
+	}
+
+	buf->ibv_buf.addr = addr;
+	buf->ibv_buf.size = size;
+	buf->ibv_buf.comp_mask = IBV_BUF_DMABUF;
+	buf->ibv_buf.dmabuf.fd = dmabuf_fd;
+	buf->type = MLX5_ALLOC_TYPE_DMABUF;
+	return 0;
+}
+
 int mlx5_alloc_prefered_buf(struct mlx5_context *mctx,
 			    struct mlx5_buf *buf,
 			    size_t size, int page_size,
@@ -282,6 +319,9 @@ int mlx5_alloc_prefered_buf(struct mlx5_context *mctx,
 			    const char *component)
 {
 	int ret;
+
+	if (type == MLX5_ALLOC_TYPE_DMABUF)
+		return mlx5_alloc_buf_dmabuf(mctx, buf, size);
 
 	if (type == MLX5_ALLOC_TYPE_CUSTOM) {
 		ret = mlx5_alloc_buf_custom(mctx, buf, size);
@@ -357,6 +397,10 @@ int mlx5_free_actual_buf(struct mlx5_context *ctx, struct mlx5_buf *buf)
 		mlx5_free_buf_custom(ctx, buf);
 		break;
 
+	case MLX5_ALLOC_TYPE_DMABUF:
+		mlx5_free_buf_dmabuf(ctx, buf);
+		break;
+
 	default:
 		mlx5_err(ctx->dbg_fp, "Bad allocation type\n");
 	}
@@ -396,6 +440,13 @@ bool mlx5_is_custom_alloc(struct ibv_pd *pd)
 	return (mparent_domain && mparent_domain->alloc && mparent_domain->free);
 }
 
+bool mlx5_is_dmabuf_alloc(struct ibv_pd *pd)
+{
+	struct mlx5_parent_domain *mparent_domain = to_mparent_domain(pd);
+
+	return (mparent_domain && mparent_domain->dmabuf_heap);
+}
+
 bool mlx5_is_extern_alloc(struct mlx5_context *context)
 {
 	return context->extern_alloc.alloc && context->extern_alloc.free;
@@ -410,6 +461,11 @@ void mlx5_get_alloc_type(struct mlx5_context *context,
 {
 	char *env_value;
 	char name[128];
+
+	if (mlx5_is_dmabuf_alloc(pd)) {
+		*alloc_type = MLX5_ALLOC_TYPE_DMABUF;
+		return;
+	}
 
 	if (mlx5_is_custom_alloc(pd)) {
 		*alloc_type = MLX5_ALLOC_TYPE_CUSTOM;
