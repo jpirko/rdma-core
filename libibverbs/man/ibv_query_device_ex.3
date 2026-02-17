@@ -160,6 +160,14 @@ This feature can be enabled on a QP or WQ basis via the
 IBV_QP_CREATE_PCI_WRITE_END_PADDING or IBV_WQ_FLAGS_PCI_WRITE_END_PADDING
 flags.
 
+.TP 7
+IBV_DEVICE_CC_DMA_BOUNCE
+
+Indicates the device is running inside a Confidential Computing (CoCo) guest
+that requires DMA bounce buffering. Applications must allocate memory from a
+"system_cc_shared" DMA-buf heap so the device can perform DMA to and from
+guest memory.
+
 .SH "RETURN VALUE"
 .B ibv_query_device_ex()
 returns 0 on success, or the value of errno on failure (which indicates the failure reason).
