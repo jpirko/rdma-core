@@ -3233,6 +3233,17 @@ ibv_free_buf(struct ibv_pd *pd, struct ibv_buf *buf)
 }
 
 /**
+ * ibv_reg_buf_mr - Register an MR for a buffer from ibv_alloc_buf
+ * @pd: Protection domain
+ * @buf: Handle from ibv_alloc_buf()
+ * @addr: Mapped buffer address returned by ibv_alloc_buf()
+ * @length: Length in bytes
+ * @access: Access flags (IBV_ACCESS_*)
+ */
+struct ibv_mr *ibv_reg_buf_mr(struct ibv_pd *pd, struct ibv_buf *buf,
+			      void *addr, size_t length, int access);
+
+/**
  * ibv_alloc_dmah - Allocate a dma handle
  */
 struct ibv_dmah *ibv_alloc_dmah(struct ibv_context *context,

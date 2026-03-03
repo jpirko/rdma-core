@@ -435,6 +435,31 @@ struct ibv_mr *ibv_reg_dmabuf_mr(struct ibv_pd *pd, uint64_t offset,
 	return mr;
 }
 
+struct ibv_mr *ibv_reg_buf_mr(struct ibv_pd *pd, struct ibv_buf *buf,
+			      void *addr, size_t length, int access)
+{
+	if (buf->comp_mask & IBV_BUF_DMABUF) {
+		uintptr_t base = (uintptr_t)buf->addr;
+		uintptr_t iova = (uintptr_t)addr;
+		size_t off;
+
+		if (iova < base) {
+			errno = EINVAL;
+			return NULL;
+		}
+		off = iova - base;
+		if (length > buf->size || off > buf->size - length) {
+			errno = EINVAL;
+			return NULL;
+		}
+
+		return ibv_reg_dmabuf_mr(pd, off, length, iova,
+					 buf->dmabuf.fd, access);
+	}
+
+	return ibv_reg_mr(pd, addr, length, access);
+}
+
 /* Note: mr_init_attr may be modified during this call */
 struct ibv_mr *ibv_reg_mr_ex(struct ibv_pd *pd, struct ibv_mr_init_attr *mr_init_attr)
 {
