@@ -581,6 +581,15 @@ mlx5_alloc_parent_domain(struct ibv_context *context,
 		}
 	}
 
+	if (!mparent_domain->dmabuf_heap) {
+		mparent_domain->dmabuf_heap = ibv_dmabuf_heap_init("system");
+		if (!mparent_domain->dmabuf_heap) {
+			errno = ENOMEM;
+			free(mparent_domain);
+			return NULL;
+		}
+	}
+
 	if (attr->td) {
 		mparent_domain->mtd = to_mtd(attr->td);
 		atomic_fetch_add(&mparent_domain->mtd->refcount, 1);
