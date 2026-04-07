@@ -437,8 +437,7 @@ struct mlx5_hugetlb_mem {
 };
 
 struct mlx5_buf {
-	void			       *buf;
-	size_t				length;
+	struct ibv_buf			ibv_buf;
 	int                             base;
 	struct mlx5_hugetlb_mem	       *hmem;
 	enum mlx5_alloc_type		type;

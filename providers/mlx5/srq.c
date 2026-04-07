@@ -42,7 +42,7 @@
 
 static void *get_wqe(struct mlx5_srq *srq, int n)
 {
-	return srq->buf.buf + (n << srq->wqe_shift);
+	return srq->buf.ibv_buf.addr + (n << srq->wqe_shift);
 }
 
 static inline void set_next_tail(struct mlx5_srq *srq, int next_tail)
@@ -403,7 +403,7 @@ int mlx5_alloc_srq_buf(struct ibv_context *context, struct mlx5_srq *srq,
 		return -1;
 
 	if (srq->buf.type != MLX5_ALLOC_TYPE_CUSTOM)
-		memset(srq->buf.buf, 0, buf_size);
+		memset(srq->buf.ibv_buf.addr, 0, buf_size);
 
 	srq->head = 0;
 	srq->tail = align_queue_size(orig_max_wr + 1) - 1;
