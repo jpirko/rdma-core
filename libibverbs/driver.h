@@ -49,9 +49,17 @@
 
 struct verbs_device;
 
+enum {
+	IBV_BUF_DMABUF = 1 << 0,
+};
+
 struct ibv_buf {
 	void *addr;
 	size_t size;
+	uint32_t comp_mask;
+	struct {
+		int fd;
+	} dmabuf;
 };
 
 enum {
